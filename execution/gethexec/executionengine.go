@@ -40,6 +40,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -55,6 +56,7 @@ import (
 	"github.com/offchainlabs/nitro/consensus"
 	"github.com/offchainlabs/nitro/execution"
 	"github.com/offchainlabs/nitro/execution/gethexec/addressfilter"
+	"github.com/offchainlabs/nitro/execution/gethexec/blockfacts"
 	"github.com/offchainlabs/nitro/execution/gethexec/eventfilter"
 	"github.com/offchainlabs/nitro/transactionfeed"
 	"github.com/offchainlabs/nitro/util/arbmath"
@@ -852,6 +854,7 @@ func (s *ExecutionEngine) sequenceTransactionsWithBlockMutex(header *arbostypes.
 		session.runCtx,
 		s.exposeMultiGas,
 		s.addressChecker,
+		s.blockTracer(false),
 	)
 	if err != nil {
 		return nil, nil, err
@@ -1224,6 +1227,7 @@ func (s *ExecutionEngine) createBlockFromNextMessage(msg *arbostypes.MessageWith
 			runCtx,
 			s.exposeMultiGas,
 			s.addressChecker,
+			s.blockTracer(isMsgForPrefetch),
 		)
 		if err != nil {
 			return nil, nil, nil, err
@@ -1274,6 +1278,7 @@ func (s *ExecutionEngine) createBlockFromNextMessage(msg *arbostypes.MessageWith
 		isMsgForPrefetch,
 		runCtx,
 		s.exposeMultiGas,
+		s.blockTracer(isMsgForPrefetch),
 	)
 	if err != nil {
 		return nil, nil, nil, err
@@ -1370,6 +1375,15 @@ func recordReplayInitialStatePreimages(statedb *state.StateDB, chainConfig *para
 	return nil
 }
 
+// blockTracer is the live tracer for a block that will be appended, and nil for a prefetch run,
+// whose block is discarded.
+func (s *ExecutionEngine) blockTracer(isMsgForPrefetch bool) *tracing.Hooks {
+	if isMsgForPrefetch {
+		return nil
+	}
+	return s.bc.GetVMConfig().Tracer
+}
+
 // must hold createBlockMutex
 func (s *ExecutionEngine) appendBlock(block *types.Block, statedb *state.StateDB, receipts types.Receipts, duration time.Duration) error {
 	var logs []*types.Log
@@ -1377,20 +1391,15 @@ func (s *ExecutionEngine) appendBlock(block *types.Block, statedb *state.StateDB
 		logs = append(logs, receipt.Logs...)
 	}
 	startTime := time.Now()
-	if s.bc.GetVMConfig().Tracer != nil {
-		// InsertChain is basically WriteBlockAndSetHeadWithTime along with recomputing
-		// the entire block which is also traced which works directly for live-tracing
-		if _, err := s.bc.InsertChain([]*types.Block{block}); err != nil {
-			return err
-		}
-	} else {
-		status, err := s.bc.WriteBlockAndSetHeadWithTime(block, receipts, logs, statedb, true, duration)
-		if err != nil {
-			return err
-		}
-		if status == core.SideStatTy { // TODO: This check can be removed as this WriteStatus is never returned when setting head
-			return errors.New("geth rejected block as non-canonical")
-		}
+	// The tracer saw this block's only execution in ProduceBlockAdvanced. Sealing before the
+	// head moves means the facts are served by the time newHeads announces the block.
+	blockfacts.Seal(block)
+	status, err := s.bc.WriteBlockAndSetHeadWithTime(block, receipts, logs, statedb, true, duration)
+	if err != nil {
+		return err
+	}
+	if status == core.SideStatTy { // TODO: This check can be removed as this WriteStatus is never returned when setting head
+		return errors.New("geth rejected block as non-canonical")
 	}
 	blockWriteToDbTimer.Update(time.Since(startTime).Nanoseconds())
 	baseFeeGauge.Update(block.BaseFee().Int64())

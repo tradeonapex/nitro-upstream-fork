@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
@@ -323,6 +324,7 @@ func ProduceBlock(
 	isMsgForPrefetch bool,
 	runCtx *core.MessageRunContext,
 	exposeMultiGas bool,
+	tracer *tracing.Hooks,
 ) (*types.Block, *state.StateDB, types.Receipts, error) {
 	chainConfig := chainContext.Config()
 	lastArbosVersion := types.DeserializeHeaderExtraInformation(lastBlockHeader).ArbOSFormatVersion
@@ -334,11 +336,12 @@ func ProduceBlock(
 	hooks := NewNoopSequencingHooks(txes)
 
 	return ProduceBlockAdvanced(
-		message.Header, delayedMessagesRead, lastBlockHeader, statedb, chainContext, hooks, isMsgForPrefetch, runCtx, exposeMultiGas, nil,
+		message.Header, delayedMessagesRead, lastBlockHeader, statedb, chainContext, hooks, isMsgForPrefetch, runCtx, exposeMultiGas, nil, tracer,
 	)
 }
 
 // A bit more flexible than ProduceBlock for use in the sequencer.
+// A non-nil tracer receives the transaction hooks of this, the block's only execution.
 func ProduceBlockAdvanced(
 	l1Header *arbostypes.L1IncomingMessageHeader,
 	delayedMessagesRead uint64,
@@ -350,6 +353,7 @@ func ProduceBlockAdvanced(
 	runCtx *core.MessageRunContext,
 	exposeMultiGas bool,
 	addressChecker state.AddressChecker,
+	tracer *tracing.Hooks,
 ) (*types.Block, *state.StateDB, types.Receipts, error) {
 
 	arbState, err := arbosState.OpenSystemArbosState(statedb, nil, false)
@@ -562,7 +566,7 @@ func ProduceBlockAdvanced(
 			// tx's gas leaks into subsequent receipts via DeriveFields).
 			preTxGasPool := gethGas.Snapshot()
 			blockContext := core.NewEVMBlockContext(header, chainContext, &header.Coinbase)
-			evm := vm.NewEVM(blockContext, buildState.statedb, chainConfig, vm.Config{ExposeMultiGas: exposeMultiGas})
+			evm := vm.NewEVM(blockContext, buildState.statedb, chainConfig, vm.Config{ExposeMultiGas: exposeMultiGas, Tracer: tracer})
 			receipt, _, result, err := core.ApplyTransactionWithResultFilter(
 				evm,
 				gethGas,

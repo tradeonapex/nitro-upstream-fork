@@ -35,6 +35,7 @@ import (
 	"github.com/offchainlabs/nitro/consensus/consensusrpcclient"
 	"github.com/offchainlabs/nitro/execution"
 	"github.com/offchainlabs/nitro/execution/gethexec/addressfilter"
+	"github.com/offchainlabs/nitro/execution/gethexec/blockfacts"
 	"github.com/offchainlabs/nitro/execution/gethexec/eventfilter"
 	executionrpcserver "github.com/offchainlabs/nitro/execution/rpcserver"
 	"github.com/offchainlabs/nitro/gethhook"
@@ -577,6 +578,12 @@ func CreateExecutionNode(
 			config.RPC.ClassicRedirectTimeout,
 		),
 		Public: false,
+	})
+	apis = append(apis, rpc.API{
+		Namespace: "click",
+		Version:   "1.0",
+		Service:   blockfacts.API{},
+		Public:    false,
 	})
 	apis = append(apis, rpc.API{
 		Namespace: "debug",
