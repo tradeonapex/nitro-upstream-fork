@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth"
 	"github.com/ethereum/go-ethereum/eth/filters"
+	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
@@ -579,10 +580,10 @@ func CreateExecutionNode(
 		),
 		Public: false,
 	})
+	// Registered after the backend's debug APIs, so its debug_traceBlockByHash replaces geth's.
 	apis = append(apis, rpc.API{
-		Namespace: "click",
-		Version:   "1.0",
-		Service:   blockfacts.API{},
+		Namespace: "debug",
+		Service:   blockfacts.NewDebugAPI(tracers.NewAPI(backend.APIBackend())),
 		Public:    false,
 	})
 	apis = append(apis, rpc.API{

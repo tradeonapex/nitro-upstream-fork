@@ -1,14 +1,16 @@
 // Package blockfacts records each block's per-transaction state diff during the node's only
-// execution of the block, and serves it over click_blockFacts.
+// execution of the block, and serves it as the answer to debug_traceBlockByHash.
 //
 // The diff is geth's prestateTracer in diff mode without code, the exact payload the indexer
 // requests from debug_traceBlockByHash. Serving it from here spares the node a second execution.
 package blockfacts
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"sync/atomic"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/tracers"
+	"github.com/ethereum/go-ethereum/eth/tracers/logger"
 	_ "github.com/ethereum/go-ethereum/eth/tracers/native" // registers prestateTracer
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -34,6 +37,8 @@ var (
 	sealedCounter     = metrics.NewRegisteredCounter("click/blockfacts/sealed", nil)
 	incompleteCounter = metrics.NewRegisteredCounter("click/blockfacts/incomplete", nil)
 	txFailedCounter   = metrics.NewRegisteredCounter("click/blockfacts/tx_trace_failed", nil)
+	servedCounter     = metrics.NewRegisteredCounter("click/blockfacts/served", nil)
+	fallbackCounter   = metrics.NewRegisteredCounter("click/blockfacts/fallback", nil)
 )
 
 // active is the process's one collector. Seal and the API reach it here, because the live
@@ -215,11 +220,48 @@ func lookup(hash common.Hash) []TxFacts {
 	return c.blocks[hash]
 }
 
-// API serves the click namespace.
-type API struct{}
+// DebugAPI overrides debug_traceBlockByHash. It answers the indexer's prestate diff request from
+// the sealed blocks, and sends every other request to geth's live tracer.
+//
+// Register it after geth's debug APIs: the RPC server keeps the last method registered under a
+// name. It has exactly one exported method, so it replaces no other debug method.
+type DebugAPI struct {
+	live *tracers.API
+}
 
-// BlockFacts serves click_blockFacts: the per-transaction diffs of the block with hash, or null
-// when the block is not buffered or this node runs no collector.
-func (API) BlockFacts(hash common.Hash) []TxFacts {
-	return lookup(hash)
+// NewDebugAPI wraps live, the tracer API that serves every request the sealed blocks cannot.
+func NewDebugAPI(live *tracers.API) *DebugAPI {
+	return &DebugAPI{live: live}
+}
+
+// TraceBlockByHash returns the sealed diffs of the block with hash when config asks for exactly
+// what the collector recorded, and a live trace otherwise. Both answers have the same shape.
+func (a *DebugAPI) TraceBlockByHash(ctx context.Context, hash common.Hash, config *tracers.TraceConfig) (any, error) {
+	if sealedConfig(config) {
+		if facts := lookup(hash); facts != nil {
+			servedCounter.Inc(1)
+			return facts, nil
+		}
+		fallbackCounter.Inc(1)
+	}
+	return a.live.TraceBlockByHash(ctx, hash, config)
+}
+
+// sealedConfig reports whether config asks for the prestate diff the collector records. The
+// timeout is ignored, because a buffered answer needs no execution time.
+func sealedConfig(config *tracers.TraceConfig) bool {
+	if config == nil || config.Tracer == nil || *config.Tracer != "prestateTracer" {
+		return false
+	}
+	if config.Config != nil && *config.Config != (logger.Config{}) {
+		return false
+	}
+	var got, want map[string]any
+	if err := json.Unmarshal(config.TracerConfig, &got); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(prestateConfig, &want); err != nil {
+		panic(fmt.Sprintf("blockfacts: prestateConfig is not valid JSON: %v", err))
+	}
+	return reflect.DeepEqual(got, want)
 }
