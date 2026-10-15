@@ -52,6 +52,7 @@ import (
 	"github.com/offchainlabs/nitro/cmd/util/confighelpers"
 	"github.com/offchainlabs/nitro/daprovider"
 	"github.com/offchainlabs/nitro/execution/gethexec"
+	"github.com/offchainlabs/nitro/execution/gethexec/blockfacts"
 	_ "github.com/offchainlabs/nitro/execution/nodeinterface"
 	"github.com/offchainlabs/nitro/execution_consensus"
 	"github.com/offchainlabs/nitro/nitroversion"
@@ -430,6 +431,12 @@ func mainImpl() int {
 	traceConfig := nodeConfig.Execution.VmTrace
 	var tracer *tracing.Hooks
 	if traceConfig.TracerName != "" {
+		// Blocks execute once, in ProduceBlockAdvanced, which fires only transaction hooks.
+		// A tracer that needs block hooks would see none, so only blockfacts may run.
+		if traceConfig.TracerName != blockfacts.Name {
+			log.Error("unsupported live tracer: this build runs only "+blockfacts.Name, "name", traceConfig.TracerName)
+			return 1
+		}
 		tracer, err = tracers.LiveDirectory.New(traceConfig.TracerName, json.RawMessage(traceConfig.JSONConfig))
 		if err != nil {
 			log.Error("custom tracer error", "name", traceConfig.TracerName, "err", err)

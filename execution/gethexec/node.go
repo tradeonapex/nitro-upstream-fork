@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth"
 	"github.com/ethereum/go-ethereum/eth/filters"
+	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
@@ -35,6 +36,7 @@ import (
 	"github.com/offchainlabs/nitro/consensus/consensusrpcclient"
 	"github.com/offchainlabs/nitro/execution"
 	"github.com/offchainlabs/nitro/execution/gethexec/addressfilter"
+	"github.com/offchainlabs/nitro/execution/gethexec/blockfacts"
 	"github.com/offchainlabs/nitro/execution/gethexec/eventfilter"
 	executionrpcserver "github.com/offchainlabs/nitro/execution/rpcserver"
 	"github.com/offchainlabs/nitro/gethhook"
@@ -577,6 +579,12 @@ func CreateExecutionNode(
 			config.RPC.ClassicRedirectTimeout,
 		),
 		Public: false,
+	})
+	// Registered after the backend's debug APIs, so its debug_traceBlockByHash replaces geth's.
+	apis = append(apis, rpc.API{
+		Namespace: "debug",
+		Service:   blockfacts.NewDebugAPI(tracers.NewAPI(backend.APIBackend())),
+		Public:    false,
 	})
 	apis = append(apis, rpc.API{
 		Namespace: "debug",
